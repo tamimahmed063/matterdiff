@@ -1,0 +1,27 @@
+digraph g {
+
+	s0 [shape="circle" label="s0"];
+	s1 [shape="circle" label="s1"];
+	s2 [shape="circle" label="s2"];
+	s3 [shape="circle" label="s3"];
+	s4 [shape="circle" label="s4"];
+	s0 -> s1 [label="PASE_PBKDF_REQUEST / PASE_PBKDF_SENT"];
+	s0 -> s4 [label="PASE_PAKE1 / SESSION_ERROR"];
+	s0 -> s4 [label="PASE_PAKE3 / SESSION_ERROR"];
+	s1 -> s0 [label="PASE_PBKDF_REQUEST / PASE_PBKDF_SENT"];
+	s1 -> s2 [label="PASE_PAKE1 / PASE_PAKE1_SENT"];
+	s1 -> s4 [label="PASE_PAKE3 / SESSION_ERROR"];
+	s2 -> s1 [label="PASE_PBKDF_REQUEST / SESSION_ERROR"];
+	s2 -> s0 [label="PASE_PAKE1 / SESSION_ERROR"];
+	s2 -> s3 [label="PASE_PAKE3 / PASE_COMPLETE"];
+	s3 -> s3 [label="PASE_PBKDF_REQUEST / INVALID_STATE"];
+	s3 -> s3 [label="PASE_PAKE1 / INVALID_STATE"];
+	s3 -> s3 [label="PASE_PAKE3 / INVALID_STATE"];
+	s4 -> s4 [label="PASE_PBKDF_REQUEST / SESSION_ERROR"];
+	s4 -> s4 [label="PASE_PAKE1 / SESSION_ERROR"];
+	s4 -> s4 [label="PASE_PAKE3 / SESSION_ERROR"];
+
+__start0 [label="" shape="none" width="0" height="0"];
+__start0 -> s0;
+
+}

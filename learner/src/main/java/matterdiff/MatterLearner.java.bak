@@ -1,0 +1,265 @@
+package matterdiff;
+
+import de.learnlib.algorithm.ttt.mealy.TTTLearnerMealy;
+import de.learnlib.acex.AcexAnalyzers;
+import de.learnlib.filter.cache.mealy.MealyCacheOracle;
+import de.learnlib.filter.cache.mealy.MealyCaches;
+import de.learnlib.oracle.EquivalenceOracle;
+import de.learnlib.oracle.MembershipOracle;
+import de.learnlib.oracle.equivalence.MealyWMethodEQOracle;
+import de.learnlib.oracle.membership.SULOracle;
+import de.learnlib.query.DefaultQuery;
+import de.learnlib.query.Query;
+import de.learnlib.util.Experiment;
+import net.automatalib.alphabet.Alphabet;
+import net.automatalib.alphabet.Alphabets;
+import net.automatalib.automaton.transducer.MealyMachine;
+import net.automatalib.serialization.dot.GraphDOT;
+import net.automatalib.word.Word;
+import net.automatalib.word.WordBuilder;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+
+public class MatterLearner {
+
+    private static final String CACHE_DIR = System.getProperty("user.home") + "/matterdiff/cache";
+
+    public static void main(String[] args) throws IOException {
+        String phase     = args.length > 0 ? args[0] : "PASE";
+        String dotFile   = System.getProperty("user.home") + "/matterdiff/fsm/" + phase.toLowerCase() + "_fsm.dot";
+        String cacheFile = CACHE_DIR + "/" + phase.toLowerCase() + "_cache.tsv";
+
+        Files.createDirectories(Paths.get(CACHE_DIR));
+        Files.createDirectories(Paths.get(System.getProperty("user.home") + "/matterdiff/fsm"));
+
+        Alphabet<String> alphabet = buildAlphabet(phase);
+
+        MatterSUL sul = new MatterSUL();
+
+        MembershipOracle.MealyMembershipOracle<String, String> sulOracle =
+            new SULOracle<>(sul);
+
+        // Sits closest to the SUL — counts real device queries (cache misses)
+        CacheStatsOracle statsOracle = new CacheStatsOracle(sulOracle);
+
+        // Logs every query that reaches the SUL to the cache file
+        LoggingOracle loggingOracle = new LoggingOracle(statsOracle, cacheFile);
+
+        // Cache sits on top — answers from memory when possible
+        MealyCacheOracle<String, String> cache =
+            MealyCaches.createDAGCache(alphabet, loggingOracle);
+
+        // Preload cache from file so restarts reuse previous results
+        int loaded = preloadCache(cache, cacheFile, alphabet);
+        System.out.println("Loaded " + loaded + " queries from cache: " + cacheFile);
+
+        TTTLearnerMealy<String, String> learner =
+            new TTTLearnerMealy<>(alphabet, cache, AcexAnalyzers.BINARY_SEARCH_BWD);
+
+        EquivalenceOracle.MealyEquivalenceOracle<String, String> eqOracle =
+            new MealyWMethodEQOracle<>(cache, 3);
+
+        Experiment.MealyExperiment<String, String> experiment =
+            new Experiment.MealyExperiment<>(learner, eqOracle, alphabet);
+
+        experiment.run();
+
+        MealyMachine<?, String, ?, String> fsm = experiment.getFinalHypothesis();
+
+        System.out.println("Learning complete.");
+        System.out.println("States       : " + fsm.size());
+        System.out.println("Rounds       : " + experiment.getRounds().getCount());
+        System.out.println("Cache hits   : " + statsOracle.hits);
+        System.out.println("Cache misses : " + statsOracle.misses);
+
+        try (FileWriter fw = new FileWriter(dotFile)) {
+            GraphDOT.write(fsm, alphabet, fw);
+        }
+        System.out.println("FSM written to " + dotFile);
+
+        sul.close();
+    }
+
+    // -------------------------------------------------------------------------
+    // LoggingOracle: sits between MealyCacheOracle and CacheStatsOracle.
+    // Called only on cache misses. Writes each answered query to the cache file.
+    // -------------------------------------------------------------------------
+    static class LoggingOracle
+            implements MembershipOracle.MealyMembershipOracle<String, String> {
+
+        private final MembershipOracle.MealyMembershipOracle<String, String> delegate;
+        private final String cacheFile;
+
+        LoggingOracle(MembershipOracle.MealyMembershipOracle<String, String> delegate,
+                      String cacheFile) {
+            this.delegate  = delegate;
+            this.cacheFile = cacheFile;
+        }
+
+        @Override
+        public void processQueries(Collection<? extends Query<String, Word<String>>> queries) {
+            // Let the delegate answer the queries first
+            delegate.processQueries(queries);
+            // Then persist each answered query
+            try (BufferedWriter bw = Files.newBufferedWriter(
+                    Paths.get(cacheFile),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND)) {
+                for (Query<String, Word<String>> q : queries) {
+                    if (!(q instanceof DefaultQuery)) continue;
+                    DefaultQuery<String, Word<String>> dq = (DefaultQuery<String, Word<String>>) q;
+                    Word<String> input  = dq.getInput();
+                    Word<String> output = dq.getOutput();
+                    if (input == null || output == null || input.isEmpty()) continue;
+                    bw.write(wordToStr(input) + "\t" + wordToStr(output));
+                    bw.newLine();
+                }
+                bw.flush();
+            } catch (IOException e) {
+                System.err.println("Warning: could not write cache: " + e.getMessage());
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CacheStatsOracle: sits closest to the SUL.
+    // Every call here is a real device query (cache miss from above).
+    // -------------------------------------------------------------------------
+    static class CacheStatsOracle
+            implements MembershipOracle.MealyMembershipOracle<String, String> {
+
+        private final MembershipOracle.MealyMembershipOracle<String, String> delegate;
+        long hits   = 0;
+        long misses = 0;
+
+        CacheStatsOracle(MembershipOracle.MealyMembershipOracle<String, String> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void processQueries(Collection<? extends Query<String, Word<String>>> queries) {
+            misses += queries.size();
+            for (Query<String, Word<String>> q : queries) {
+                System.out.printf("[CACHE MISS  #%04d] %s%n", misses, wordToStr(q.getInput()));
+            }
+            delegate.processQueries(queries);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // preloadCache: reads the TSV file and injects all entries into the cache
+    // as a single batch so MealyCacheOracle registers them correctly.
+    // -------------------------------------------------------------------------
+    static int preloadCache(MealyCacheOracle<String, String> cache,
+                            String cacheFile,
+                            Alphabet<String> alphabet) throws IOException {
+        Path p = Paths.get(cacheFile);
+        if (!Files.exists(p)) return 0;
+
+        List<DefaultQuery<String, Word<String>>> queries = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        try (BufferedReader br = Files.newBufferedReader(p)) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                String[] parts = line.split("\t", 2);
+                if (parts.length != 2) continue;
+
+                Word<String> input  = strToWord(parts[0]);
+                Word<String> output = strToWord(parts[1]);
+
+                if (input.isEmpty() || output.isEmpty()) continue;
+                if (input.size() != output.size()) {
+                    System.err.printf("Warning: skipping malformed cache line (length mismatch): %s%n", line);
+                    continue;
+                }
+
+                // Validate all symbols belong to the alphabet
+                boolean valid = true;
+                for (String sym : input) {
+                    if (!alphabet.containsSymbol(sym)) {
+                        System.err.printf("Warning: skipping cache line with unknown symbol '%s': %s%n", sym, line);
+                        valid = false;
+                        break;
+                    }
+                }
+                if (!valid) continue;
+
+                // Deduplicate — keep last occurrence
+                if (seen.contains(parts[0])) continue;
+                seen.add(parts[0]);
+
+                DefaultQuery<String, Word<String>> q = new DefaultQuery<>(input);
+                q.answer(output);
+                queries.add(q);
+            }
+        }
+
+        if (!queries.isEmpty()) {
+            // Batch processQueries — MealyCacheOracle correctly registers
+            // pre-answered queries when submitted as a collection
+            cache.processQueries(queries);
+        }
+
+        return queries.size();
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+    static String wordToStr(Word<String> w) {
+        if (w == null || w.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < w.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(w.getSymbol(i));
+        }
+        return sb.toString();
+    }
+
+    static Word<String> strToWord(String s) {
+        if (s == null || s.trim().isEmpty()) return Word.epsilon();
+        String[] syms = s.split(",");
+        WordBuilder<String> wb = new WordBuilder<>();
+        for (String sym : syms) wb.add(sym.trim());
+        return wb.toWord();
+    }
+
+    private static Alphabet<String> buildAlphabet(String phase) {
+        List<String> symbols;
+        switch (phase.toUpperCase()) {
+            case "PASE":
+                symbols = Arrays.asList(
+                    "PASE_PBKDF_REQUEST",
+                    "PASE_PAKE1",
+                    "PASE_PAKE3"
+                );
+                break;
+            case "COMMISSIONING":
+                symbols = Arrays.asList(
+                    "COMM_ARM_FAILSAFE",
+                    "COMM_ATTESTATION_REQUEST",
+                    "COMM_CERT_CHAIN_REQUEST_DAC",
+                    "COMM_CERT_CHAIN_REQUEST_PAI",
+                    "COMM_CSR_REQUEST",
+                    "COMM_ADD_TRUSTED_ROOT_CERT",
+                    "COMM_ADD_NOC"
+                );
+                break;
+            case "CASE":
+                symbols = Arrays.asList(
+                    "CASE_START_SESSION",
+                    "CASE_SEND_SIGMA1",
+                    "CASE_SEND_SIGMA3"
+                );
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown phase: " + phase);
+        }
+        return Alphabets.fromList(symbols);
+    }
+}

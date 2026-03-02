@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>matterdiff</groupId>
+    <artifactId>matterdiff-learner</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <learnlib.version>0.17.0</learnlib.version>
+        <automatalib.version>0.11.0</automatalib.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>de.learnlib</groupId>
+            <artifactId>learnlib-ttt</artifactId>
+            <version>${learnlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>de.learnlib</groupId>
+            <artifactId>learnlib-membership-oracles</artifactId>
+            <version>${learnlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>de.learnlib</groupId>
+            <artifactId>learnlib-cache</artifactId>
+            <version>${learnlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>de.learnlib</groupId>
+            <artifactId>learnlib-equivalence-oracles</artifactId>
+            <version>${learnlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>de.learnlib</groupId>
+            <artifactId>learnlib-util</artifactId>
+            <version>${learnlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.automatalib</groupId>
+            <artifactId>automata-core</artifactId>
+            <version>${automatalib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.automatalib</groupId>
+            <artifactId>automata-serialization-dot</artifactId>
+            <version>${automatalib.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>matterdiff.MatterLearner</mainClass>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
